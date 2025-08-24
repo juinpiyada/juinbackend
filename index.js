@@ -1,7 +1,6 @@
 require('dotenv').config();
 // Correct path to the db.js
 
-
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -17,7 +16,8 @@ const conversationRoutes = require('./routes/conversations');
 const app = express();
 const PORT = process.env.PORT || 9091;
 
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
+// Allow CORS from any origin
+app.use(cors({ origin: '*' }));  // This line allows all requests from any origin
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
