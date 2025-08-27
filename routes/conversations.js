@@ -5,19 +5,21 @@ const { upload, uploadDir } = require('../middleware/upload');
 
 const router = express.Router();
 
-// GET /issues/:id/conversations
+/* ---------------- GET: conversations by issue ---------------- */
 router.get('/issues/:id/conversations', async (req, res) => {
   const issueId = Number(req.params.id);
-  if (isNaN(issueId)) return res.status(400).json({ status: 'error', message: 'Invalid issue ID' });
+  if (isNaN(issueId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid issue ID' });
+  }
 
   const sql = `
     SELECT
       c.id,
       c.issue_id,
-      i.user_id      AS reporter_id,
+      i.user_id AS reporter_id,
       i.assignee_id,
       c.sender_id,
-      sender.username   AS sender_name,
+      sender.username AS sender_name,
       assignee.username AS assignee_name,
       c.message_type,
       c.message_text,
@@ -44,52 +46,70 @@ router.get('/issues/:id/conversations', async (req, res) => {
       message_type: r.message_type,
       message_text: r.message_text,
       attachment: r.attachment,
-      attachment_url: r.attachment ? `${req.protocol}://${req.get('host')}/uploads/${r.attachment}` : null,
+      attachment_url: r.attachment
+        ? `${req.protocol}://${req.get('host')}/uploads/${r.attachment}`
+        : null,
       created_at: r.created_at
     }));
     res.json({ status: 'ok', data });
   } catch (err) {
-    console.error('DB error fetching conversations:', err);
-    res.status(500).json({ status: 'error', message: 'Database error' });
+    console.error('DB error fetching conversations:', err.message);
+    res.status(500).json({ status: 'error', message: err.message });
   }
 });
 
-// POST /issues/:id/conversations
+/* ---------------- POST: create conversation ---------------- */
 router.post('/issues/:id/conversations', upload.single('attachment'), async (req, res) => {
   const issueId = parseInt(req.params.id, 10);
   const senderId = parseInt(req.header('x-user-id') || req.body.sender_id, 10);
   const { message_type, message_text } = req.body;
   const attachment = req.file ? req.file.filename : null;
 
-  if (isNaN(issueId) || isNaN(senderId) || (!message_text?.trim() && !attachment)) {
+  if (isNaN(issueId) || isNaN(senderId)) {
     return res.status(400).json({
       status: 'error',
-      message: 'issue ID, sender_id and either message_text or attachment are required'
+      message: 'Valid issue ID and sender ID required'
+    });
+  }
+
+  if (!message_text?.trim() && !attachment) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'Message text or attachment required'
     });
   }
 
   const textValue = message_text?.trim() || '';
 
   try {
-    const chk = await pool.query('SELECT user_id AS reporter_id, assignee_id FROM issues WHERE id = $1', [issueId]);
-    if (!chk.rows.length) return res.status(404).json({ status: 'error', message: 'Issue not found' });
+    // verify issue + authorization
+    const chk = await pool.query(
+      'SELECT user_id AS reporter_id, assignee_id FROM issues WHERE id = $1',
+      [issueId]
+    );
+    if (!chk.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Issue not found' });
+    }
 
     const { reporter_id, assignee_id } = chk.rows[0];
     if (senderId !== reporter_id && senderId !== assignee_id) {
       return res.status(403).json({ status: 'error', message: 'Not authorized' });
     }
 
+    // insert message
     const ins = await pool.query(
       `INSERT INTO issue_conversations (issue_id, sender_id, message_type, message_text, attachment, created_at)
        VALUES ($1, $2, $3, $4, $5, NOW())
        RETURNING id`,
-      [issueId, senderId, message_type, textValue, attachment]
+      [issueId, senderId, message_type || 'text', textValue, attachment]
     );
 
     const convId = ins.rows[0].id;
 
+    // select newly created message
     const sel = await pool.query(
-      `SELECT c.id, c.issue_id, c.sender_id, u.username AS sender_name, c.message_type, c.message_text, c.attachment, c.created_at
+      `SELECT c.id, c.issue_id, c.sender_id, u.username AS sender_name,
+              c.message_type, c.message_text, c.attachment, c.created_at
        FROM issue_conversations c
        JOIN users u ON c.sender_id = u.id
        WHERE c.id = $1`,
@@ -105,17 +125,20 @@ router.post('/issues/:id/conversations', upload.single('attachment'), async (req
       message_type: m.message_type,
       message_text: m.message_text,
       attachment: m.attachment,
-      attachment_url: m.attachment ? `${req.protocol}://${req.get('host')}/uploads/${m.attachment}` : null,
+      attachment_url: m.attachment
+        ? `${req.protocol}://${req.get('host')}/uploads/${m.attachment}`
+        : null,
       created_at: m.created_at
     };
+
     res.status(201).json({ status: 'ok', data: newMsg });
   } catch (err) {
-    console.error('Create conversation error:', err);
-    res.status(500).json({ status: 'error', message: 'Database error' });
+    console.error('Create conversation error:', err.message);
+    res.status(500).json({ status: 'error', message: err.message });
   }
 });
 
-// GET /conversations/:convId/attachment
+/* ---------------- GET: attachment download ---------------- */
 router.get('/conversations/:convId/attachment', async (req, res) => {
   const convId = Number(req.params.convId);
   const viewer = Number(req.header('x-user-id'));
@@ -123,11 +146,12 @@ router.get('/conversations/:convId/attachment', async (req, res) => {
     return res.status(400).json({ status: 'error', message: 'Invalid conv ID or user ID' });
   }
 
-  const sql =
-    'SELECT ic.attachment, i.user_id AS reporter_id, i.assignee_id ' +
-    'FROM issue_conversations ic ' +
-    'INNER JOIN issues i ON ic.issue_id = i.id ' +
-    'WHERE ic.id = $1';
+  const sql = `
+    SELECT ic.attachment, i.user_id AS reporter_id, i.assignee_id
+    FROM issue_conversations ic
+    INNER JOIN issues i ON ic.issue_id = i.id
+    WHERE ic.id = $1
+  `;
 
   try {
     const { rows } = await pool.query(sql, [convId]);
@@ -143,13 +167,13 @@ router.get('/conversations/:convId/attachment', async (req, res) => {
     const filePath = path.join(uploadDir, attachment);
     res.sendFile(filePath, err2 => {
       if (err2) {
-        console.error('Error sending file:', err2);
+        console.error('Error sending file:', err2.message);
         res.status(500).end();
       }
     });
   } catch (err) {
-    console.error('Load conversation error:', err);
-    res.status(500).json({ status: 'error', message: 'Database error' });
+    console.error('Load conversation error:', err.message);
+    res.status(500).json({ status: 'error', message: err.message });
   }
 });
 
