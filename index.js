@@ -35,5 +35,6 @@ app.get('/', (_req, res) => res.json({ status: 'ok', service: 'IssueTracker API 
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
+  console.log(`Server listening on https://juinbackend.vercel.app`);
 });
+
